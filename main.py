@@ -40,16 +40,16 @@ Rules:
 )
 
 # -------------------------------------------------
-# DATA MODELS
+# DATA MODELS (ONLY REQUIRED FLEXIBILITY ADDED)
 # -------------------------------------------------
 
 class Message(BaseModel):
-    sender: str
+    sender: Optional[str] = "scammer"
     text: str
-    timestamp: str
+    timestamp: Optional[str] = None
 
 class WebhookRequest(BaseModel):
-    sessionId: str
+    sessionId: Optional[str] = "auto-session"
     message: Message
     conversationHistory: List[Dict] = []
     metadata: Dict = {}
@@ -260,6 +260,8 @@ def webhook(payload: WebhookRequest, x_api_key: str = Header(...)):
     if x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
+    conversation_history = payload.conversationHistory or []
+
     text = payload.message.text.strip()
     intel = extract_intel(text)
 
@@ -272,9 +274,9 @@ def webhook(payload: WebhookRequest, x_api_key: str = Header(...)):
             intel=None
         )
 
-    risk_score = calculate_risk(intel, text, payload.conversationHistory)
+    risk_score = calculate_risk(intel, text, conversation_history)
     raw_confidence = round(risk_score / 100, 2)
-    scam_confidence = smooth_confidence(raw_confidence, payload.conversationHistory)
+    scam_confidence = smooth_confidence(raw_confidence, conversation_history)
     threat_level = classify_threat_level(risk_score, scam_confidence)
 
     reply = ai_victim_reply(text, intel)
@@ -289,7 +291,7 @@ def webhook(payload: WebhookRequest, x_api_key: str = Header(...)):
             "risk_score": risk_score,
             "scam_confidence": scam_confidence,
             "threat_level": threat_level,
-            "turn_count": len(payload.conversationHistory) + 1,
+            "turn_count": len(conversation_history) + 1,
             "engagement_active": True
         }
     )
