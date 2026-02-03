@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Header, HTTPException, Body
+from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import re
@@ -40,8 +40,19 @@ Rules:
 )
 
 # -------------------------------------------------
-# RESPONSE MODEL (KEEP STRICT)
+# DATA MODELS
 # -------------------------------------------------
+
+class Message(BaseModel):
+    sender: str
+    text: str
+    timestamp: str
+
+class WebhookRequest(BaseModel):
+    sessionId: Optional[str] = None
+    message: Optional[Message] = None
+    conversationHistory: List[Dict] = []
+    metadata: Dict = {}
 
 class WebhookResponse(BaseModel):
     status: str
@@ -89,7 +100,12 @@ def extract_intel(text: str) -> Dict:
     }
 
 def is_clean_message(intel: Dict) -> bool:
-    return not any(intel.values())
+    return not any([
+        intel["upi_ids"],
+        intel["phone_numbers"],
+        intel["links"],
+        intel["keywords"]
+    ])
 
 def violates_safety(reply: str) -> bool:
     r = reply.lower()
@@ -101,53 +117,93 @@ def violates_safety(reply: str) -> bool:
 
 def count_payment_pressure(conversation_history: List[Dict]) -> int:
     payment_words = ["pay", "payment", "send", "transfer", "amount"]
-    return sum(
-        1 for h in conversation_history
-        if any(w in h.get("text", "").lower() for w in payment_words)
-    )
+    count = 0
+    for msg in conversation_history:
+        if msg.get("sender") == "scammer":
+            if any(w in msg.get("text", "").lower() for w in payment_words):
+                count += 1
+    return count
 
-def calculate_risk(intel: Dict, text: str, history: List[Dict]) -> int:
-    score = 0
+def calculate_risk(intel: Dict, message_text: str, conversation_history: List[Dict]) -> int:
+    risk_score = 0
+    text_lower = message_text.lower()
 
     if intel["keywords"]:
-        score += 30
+        risk_score += 30
     if intel["links"]:
-        score += 20
+        risk_score += 20
     if intel["phone_numbers"]:
-        score += 20
+        risk_score += 20
     if intel["upi_ids"]:
-        score += 30
+        risk_score += 30
 
-    if any(p in text.lower() for p in URGENCY_PHRASES):
-        score += 10
+    previous_threat = any(
+        any(k in h.get("text", "").lower() for k in ["blocked", "suspended", "account", "kyc"])
+        for h in conversation_history
+    )
 
-    pressure = count_payment_pressure(history)
-    score += min(pressure * 5, 15)
+    current_payment = any(k in text_lower for k in ["pay", "payment", "send", "transfer"])
 
-    return min(score, 80)
+    if previous_threat and current_payment:
+        risk_score += 15
 
-def smooth_confidence(raw: float, history: List[Dict]) -> float:
-    baseline = min(0.15 + len(history) * 0.05, 0.6)
-    return round(min(max(min(raw, baseline), 0.05), 0.95), 2)
+    if any(p in text_lower for p in URGENCY_PHRASES):
+        risk_score += 10
 
-def classify_threat_level(score: int, confidence: float) -> str:
-    if score >= 80 or confidence >= 0.8:
+    pressure = count_payment_pressure(conversation_history)
+    if pressure >= 4:
+        risk_score += 15
+    elif pressure == 3:
+        risk_score += 10
+    elif pressure == 2:
+        risk_score += 5
+
+    agent_confused = any(
+        h.get("sender") == "agent" and
+        any(w in h.get("text", "").lower() for w in ["samajh", "clear", "understand", "confuse"])
+        for h in conversation_history
+    )
+
+    if agent_confused and current_payment:
+        risk_score += 10
+
+    return min(risk_score, 80)
+
+def smooth_confidence(raw_confidence: float, conversation_history: List[Dict]) -> float:
+    baseline = min(0.15 + (len(conversation_history) * 0.05), 0.6)
+    smoothed = min(raw_confidence, baseline)
+    return round(min(max(smoothed, 0.05), 0.95), 2)
+
+def classify_threat_level(risk_score: int, scam_confidence: float) -> str:
+    if risk_score >= 80 or scam_confidence >= 0.8:
         return "critical"
-    if score >= 60 or confidence >= 0.6:
+    if risk_score >= 60 or scam_confidence >= 0.6:
         return "high"
-    if score >= 30 or confidence >= 0.3:
+    if risk_score >= 30 or scam_confidence >= 0.3:
         return "medium"
     return "low"
 
 # -------------------------------------------------
-# FALLBACKS
+# FALLBACK REPLIES
 # -------------------------------------------------
 
 FALLBACK_REPLIES = {
+    "keywords": [
+        "yeh thoda serious lag raha hai, account mein kya problem hai?",
+        "main thodi confuse ho gayi hoon, please clearly bata do",
+        "samajh nahi aa raha, thoda detail mein explain kar sakte ho?"
+    ],
+    "phone": [
+        "call abhi mushkil hai, pehle thoda samjha do kya karna hai",
+        "number mil gaya, lekin mujhe thoda dar lag raha hai"
+    ],
+    "link": [
+        "link open karne se pehle confirm karna tha, usmein kya hoga?",
+        "yeh link safe hai na? bas pooch rahi hoon"
+    ],
     "generic": [
-        "samajh nahi aa raha, thoda clearly bata sakte ho?",
-        "main thodi confuse ho gayi hoon, please explain karo",
-        "yeh thoda serious lag raha hai, detail mein batao"
+        "please thoda clearly samjha do",
+        "main process samajhne ki koshish kar rahi hoon"
     ]
 }
 
@@ -155,45 +211,63 @@ FALLBACK_REPLIES = {
 # GEMINI REPLY
 # -------------------------------------------------
 
-def ai_victim_reply(text: str, intel: Dict) -> str:
+def ai_victim_reply(message_text: str, intel: Dict) -> str:
+    intent = "general confusion"
+
+    if intel["upi_ids"]:
+        intent = "upi mention"
+    elif intel["phone_numbers"]:
+        intent = "call request"
+    elif intel["links"]:
+        intent = "link sent"
+    elif intel["keywords"]:
+        intent = "urgent or threatening"
+
     prompt = f"""
 Incoming scam message:
-"{text}"
+"{message_text}"
+
+Context:
+{intent}
 
 Write ONE short Hinglish reply.
 Human, worried, cooperative.
 No repetition.
 """
+
     try:
         reply = model.generate_content(prompt).text.strip()
-        if not violates_safety(reply):
-            return reply
     except Exception:
-        pass
+        reply = None
 
-    return random.choice(FALLBACK_REPLIES["generic"])
+    if not reply or violates_safety(reply):
+        if intel["phone_numbers"]:
+            return random.choice(FALLBACK_REPLIES["phone"])
+        if intel["links"]:
+            return random.choice(FALLBACK_REPLIES["link"])
+        if intel["keywords"]:
+            return random.choice(FALLBACK_REPLIES["keywords"])
+        return random.choice(FALLBACK_REPLIES["generic"])
+
+    return reply
 
 # -------------------------------------------------
-# WEBHOOK (LOOSE INPUT, STRICT OUTPUT)
+# WEBHOOK (ONLY FIX IS HERE)
 # -------------------------------------------------
 
 @app.post("/webhook", response_model=WebhookResponse)
 def webhook(
-    payload: Dict[str, Any] = Body(...),
-    x_api_key: str = Header(...)
+    payload: Dict[str, Any],
+    x_api_key: str = Header(..., alias="x-api-key")  # ✅ REQUIRED FIX
 ):
     if x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
-    # 🔹 Extract text safely from ANY payload shape
     text = (
         payload.get("message", {}).get("text")
         or payload.get("text")
-        or payload.get("message")
         or ""
     ).strip()
-
-    conversation_history = payload.get("conversationHistory", [])
 
     if not text:
         return WebhookResponse(
@@ -204,16 +278,8 @@ def webhook(
             intel=None
         )
 
+    conversation_history = payload.get("conversationHistory", [])
     intel = extract_intel(text)
-
-    if is_clean_message(intel):
-        return WebhookResponse(
-            status="ignored",
-            reply=None,
-            risk_score=0,
-            scam_confidence=0.05,
-            intel=None
-        )
 
     risk_score = calculate_risk(intel, text, conversation_history)
     raw_confidence = round(risk_score / 100, 2)
@@ -232,6 +298,7 @@ def webhook(
             "risk_score": risk_score,
             "scam_confidence": scam_confidence,
             "threat_level": threat_level,
+            "turn_count": len(conversation_history) + 1,
             "engagement_active": True
         }
     )
