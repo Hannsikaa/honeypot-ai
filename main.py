@@ -403,13 +403,25 @@ async def webhook(request: Request):
     if api_key_value != API_KEY:
         # return 200 with structured JSON (tester expects 200 in many cases)
         return JSONResponse(
-            status_code=200,
-            content={
-                "status": "ignored",
-                "reason": "invalid api key",
-                "details": None
+        status_code=200,
+        content={
+            "status": "ignored",
+            "reply": None,
+            "risk_score": 0,
+            "scam_confidence": 0.05,
+            "intel": {
+                "upi_ids": [],
+                "phone_numbers": [],
+                "links": [],
+                "keywords": [],
+                "severity": 0,
+                "threat_level": "low",
+                "turn_count": 0,
+                "engagement_active": False
             }
-        )
+        }
+    )
+
 
     # -------- BODY READ (robust) --------
     # We try several ways to read the payload safely
@@ -465,7 +477,16 @@ async def webhook(request: Request):
                 "reply": None,
                 "risk_score": 0,
                 "scam_confidence": 0.05,
-                "intel": None
+                "intel": {
+                    "upi_ids": [],
+                    "phone_numbers": [],
+                    "links": [],
+                    "keywords": [],
+                    "severity": 0,
+                    "threat_level": "low",
+                    "turn_count": 0,
+                    "engagement_active": False
+                }
             }
         )
 
