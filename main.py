@@ -84,6 +84,16 @@ FORBIDDEN_REPLY_PATTERNS = [
 # UTILITIES (keep original functionality)
 # -------------------------------------------------
 
+def classify_threat_level(risk_score: int, scam_confidence: float) -> str:
+    if risk_score >= 80 or scam_confidence >= 0.8:
+        return "critical"
+    if risk_score >= 60 or scam_confidence >= 0.6:
+        return "high"
+    if risk_score >= 30 or scam_confidence >= 0.3:
+        return "medium"
+    return "low"
+
+
 def safe_parse_json_body(request: Request) -> Any:
     """
     Try to parse JSON safely. If it's not JSON, return raw body (string) or None.
