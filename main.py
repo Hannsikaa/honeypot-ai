@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import re
@@ -124,7 +124,11 @@ def count_payment_pressure(conversation_history: List[Dict]) -> int:
                 count += 1
     return count
 
-def calculate_risk(intel: Dict, message_text: str, conversation_history: List[Dict]) -> int:
+def calculate_risk(
+    intel: Dict,
+    message_text: str,
+    conversation_history: List[Dict]
+) -> int:
     risk_score = 0
     text_lower = message_text.lower()
 
@@ -252,22 +256,35 @@ No repetition.
     return reply
 
 # -------------------------------------------------
-# WEBHOOK (ONLY FIX IS HERE)
+# 🔒 HARDENED WEBHOOK (NO 422 EVER)
 # -------------------------------------------------
 
 @app.post("/webhook", response_model=WebhookResponse)
-def webhook(
-    payload: Dict[str, Any],
-    x_api_key: str = Header(..., alias="x-api-key")
+async def webhook(
+    request: Request,
+    x_api_key: str = Header(None, alias="x-api-key")
 ):
     if x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
-    text = (
-        payload.get("message", {}).get("text")
-        or payload.get("text")
-        or ""
-    ).strip()
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+
+    text = ""
+    conversation_history = []
+
+    if isinstance(payload, dict):
+        text = (
+            payload.get("message", {}).get("text")
+            or payload.get("text")
+            or payload.get("msg")
+            or ""
+        )
+        conversation_history = payload.get("conversationHistory", [])
+
+    text = str(text).strip()
 
     if not text:
         return WebhookResponse(
@@ -278,7 +295,6 @@ def webhook(
             intel=None
         )
 
-    conversation_history = payload.get("conversationHistory", [])
     intel = extract_intel(text)
 
     risk_score = calculate_risk(intel, text, conversation_history)
@@ -302,7 +318,6 @@ def webhook(
             "engagement_active": True
         }
     )
-
 
 @app.get("/")
 def root():
