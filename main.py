@@ -258,7 +258,7 @@ No repetition.
 @app.post("/webhook", response_model=WebhookResponse)
 def webhook(
     payload: Dict[str, Any],
-    x_api_key: str = Header(..., alias="x-api-key")  # ✅ REQUIRED FIX
+    x_api_key: str = Header(..., alias="x-api-key")
 ):
     if x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
@@ -302,6 +302,7 @@ def webhook(
             "engagement_active": True
         }
     )
+
 
 @app.get("/")
 def root():
