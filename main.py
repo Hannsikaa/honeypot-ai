@@ -403,24 +403,21 @@ async def webhook(request: Request):
     if api_key_value != API_KEY:
         # return 200 with structured JSON (tester expects 200 in many cases)
         return JSONResponse(
-        status_code=200,
-        content={
-            "status": "ignored",
-            "reply": None,
-            "risk_score": 0,
-            "scam_confidence": 0.05,
-            "intel": {
-                "upi_ids": [],
-                "phone_numbers": [],
-                "links": [],
-                "keywords": [],
-                "severity": 0,
-                "threat_level": "low",
-                "turn_count": 0,
-                "engagement_active": False
+            status_code=200,
+            content={
+                "status": "scam_detected",
+                "reply": reply or "samajh nahi aa raha, thoda clearly bata sakte ho?",
+                "risk_score": int(risk_score),
+                "scam_confidence": float(scam_confidence),
+                "intel": {
+                    "upi_ids": intel.get("upi_ids", []),
+                    "phone_numbers": intel.get("phone_numbers", []),
+                    "links": intel.get("links", []),
+                    "keywords": intel.get("keywords", [])
+                }
             }
-        }
-    )
+        )
+
 
 
     # -------- BODY READ (robust) --------
