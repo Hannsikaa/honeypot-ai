@@ -147,8 +147,12 @@ async def webhook(request: Request, x_api_key: str = Header(None)):
         reply = agent_reply(conversation_history)
 
         # -------- SEND FINAL CALLBACK ONCE --------
+        intelligence = extract_intelligence(text)
+        has_intel = any(len(v) > 0 for v in intelligence.values())
+
         if (
             len(conversation_history) >= 2
+            and has_intel
             and not SESSION_STATE[session_id]["callback_sent"]
         ):
             SESSION_STATE[session_id]["callback_sent"] = True
