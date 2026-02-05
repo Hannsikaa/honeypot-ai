@@ -20,10 +20,9 @@ API_KEY = os.getenv("API_KEY", "honeypot123")
 GUVI_CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
 
 # =====================
-# IN-MEMORY SESSION TRACKING
+# IN-MEMORY SESSION STATE
 # =====================
 SESSION_STATE = {}
-# structure:
 # {
 #   sessionId: {
 #       "callback_sent": bool,
@@ -42,10 +41,10 @@ SCAM_KEYWORDS = [
 
 def is_scam(text: str) -> bool:
     text = text.lower()
-    return any(keyword in text for keyword in SCAM_KEYWORDS)
+    return any(k in text for k in SCAM_KEYWORDS)
 
 # =====================
-# AGENT RESPONSE LOGIC
+# AGENT REPLIES (HUMAN-LIKE)
 # =====================
 def agent_reply(conversation_history):
     turn = len(conversation_history)
@@ -54,12 +53,12 @@ def agent_reply(conversation_history):
         return "Why is my account being suspended?"
 
     if turn == 1:
-        return "I just want to understand what went wrong with my account."
+        return "I don’t understand what caused this issue."
 
     if turn == 2:
-        return "What details do you need from me to fix this?"
+        return "What do I need to do to fix this?"
 
-    return "Please explain clearly, I am getting confused."
+    return "Please explain clearly."
 
 # =====================
 # INTELLIGENCE EXTRACTION
@@ -82,18 +81,18 @@ async def send_final_callback(session_id, total_msgs, intelligence):
         "scamDetected": True,
         "totalMessagesExchanged": total_msgs,
         "extractedIntelligence": intelligence,
-        "agentNotes": "Scammer used urgency and verification pressure tactics"
+        "agentNotes": "Urgency-based scam with verification pressure"
     }
 
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             await client.post(GUVI_CALLBACK_URL, json=payload)
-            logging.info(f"Final callback sent for session {session_id}")
+            logging.info(f"GUVI callback sent for {session_id}")
     except Exception as e:
-        logging.error(f"GUVI callback failed for session {session_id}: {e}")
+        logging.error(f"GUVI callback failed for {session_id}: {e}")
 
 # =====================
-# BACKGROUND TASK
+# BACKGROUND CALLBACK TASK
 # =====================
 async def background_task(session_id, text, total_msgs):
     intelligence = extract_intelligence(text)
@@ -105,8 +104,8 @@ async def background_task(session_id, text, total_msgs):
 @app.post("/webhook")
 async def webhook(request: Request, x_api_key: str = Header(None)):
 
-    # -------- AUTH (SOFT FAIL SAFE) --------
-    if x_api_key and x_api_key != API_KEY:
+    # -------- STRICT AUTH --------
+    if not x_api_key or x_api_key != API_KEY:
         return JSONResponse(
             status_code=401,
             content={"status": "error", "reply": "Unauthorized"}
@@ -127,7 +126,7 @@ async def webhook(request: Request, x_api_key: str = Header(None)):
     sender = message.get("sender")
     text = message.get("text", "")
 
-    # -------- INIT SESSION STATE --------
+    # -------- INIT SESSION --------
     if session_id not in SESSION_STATE:
         SESSION_STATE[session_id] = {
             "callback_sent": False,
@@ -137,20 +136,17 @@ async def webhook(request: Request, x_api_key: str = Header(None)):
     SESSION_STATE[session_id]["total_messages"] += 1
     total_msgs = SESSION_STATE[session_id]["total_messages"]
 
-    # -------- ONLY ENGAGE SCAMMER --------
+    # -------- ONLY RESPOND TO SCAMMER --------
     if sender != "scammer":
         return JSONResponse(
-            content={
-                "status": "success",
-                "reply": "Okay."
-            }
+            content={"status": "success", "reply": "Okay."}
         )
 
-    # -------- SCAM DETECTION --------
+    # -------- SCAM FLOW --------
     if is_scam(text):
         reply = agent_reply(conversation_history)
 
-        # -------- FINAL CALLBACK CONDITIONS --------
+        # -------- SEND FINAL CALLBACK ONCE --------
         if (
             len(conversation_history) >= 2
             and not SESSION_STATE[session_id]["callback_sent"]
@@ -167,7 +163,7 @@ async def webhook(request: Request, x_api_key: str = Header(None)):
             }
         )
 
-    # -------- NON-SCAM FALLBACK --------
+    # -------- NON-SCAM --------
     return JSONResponse(
         content={
             "status": "success",
